@@ -2,43 +2,20 @@ import React, { useState } from 'react';
 import Dashboard from './components/Dashboard';
 import DJConsole from './components/DJConsole';
 import PatientView from './components/PatientView';
-import { Activity, User, Stethoscope, Settings } from 'lucide-react';
+import Login from './components/Login';
+import { Activity, LogOut, Bell, Search } from 'lucide-react';
 
 function App() {
   const [role, setRole] = useState(null);
+  const [user, setUser] = useState(null);
+
+  const handleLogin = (r, u) => {
+    setRole(r);
+    setUser(u);
+  };
 
   if (!role) {
-    return (
-      <div className="h-screen w-screen bg-brand-50 flex flex-col items-center justify-center p-6 text-brand-900">
-        <div className="flex items-center gap-3 mb-10">
-          <div className="w-12 h-12 rounded-xl bg-brand-primary flex items-center justify-center shadow-md">
-            <Activity size={28} className="text-white" />
-          </div>
-          <h1 className="text-4xl font-semibold tracking-tight text-brand-900">Vital<span className="font-light text-brand-500">Stream</span></h1>
-        </div>
-
-        <div className="glass-panel p-10 max-w-4xl w-full grid grid-cols-1 md:grid-cols-3 gap-6">
-          <RoleCard 
-            icon={<User size={32} />} 
-            title="Patient Portal" 
-            desc="View your health records and history."
-            onClick={() => setRole('patient')}
-          />
-          <RoleCard 
-            icon={<Stethoscope size={32} />} 
-            title="Doctor Dashboard" 
-            desc="Monitor patients and resolve critical alerts."
-            onClick={() => setRole('doctor')}
-          />
-          <RoleCard 
-            icon={<Settings size={32} />} 
-            title="Admin Simulator" 
-            desc="Inject telemetry data to test the RPM system."
-            onClick={() => setRole('admin')}
-          />
-        </div>
-      </div>
-    );
+    return <Login onLogin={handleLogin} />;
   }
 
   return (
@@ -48,21 +25,56 @@ function App() {
           <div className="w-9 h-9 rounded-lg bg-brand-primary flex items-center justify-center shadow-sm group-hover:bg-brand-primaryDark transition-colors">
             <Activity size={20} className="text-white" />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight text-brand-900">Vital<span className="font-light text-brand-500">Stream</span></h1>
+          <h1 className="text-xl font-semibold tracking-tight text-brand-900 hidden sm:block">Vital<span className="font-light text-brand-500">Stream</span></h1>
         </div>
         
-        <div className="flex items-center gap-6">
-          <span className="text-sm text-brand-600 capitalize font-semibold px-3 py-1 bg-brand-50 rounded-md border border-brand-200">
-            {role} View
+        <div className="flex-1 max-w-xl px-8 hidden md:block">
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search size={16} className="text-brand-400" />
+            </div>
+            <input
+              type="text"
+              placeholder="Search patients, alerts..."
+              className="block w-full pl-10 pr-3 py-2 border border-brand-200 rounded-lg bg-brand-50 text-sm focus:bg-white focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-colors"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 sm:gap-6">
+          <span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-md bg-brand-100 text-brand-700 text-xs font-semibold capitalize border border-brand-200">
+            {role} Portal
           </span>
-          <button onClick={() => setRole(null)} className="text-sm font-medium text-brand-500 hover:text-brand-900 transition-colors">
-            Switch Role
+          
+          <button className="relative p-2 text-brand-400 hover:text-brand-600 transition-colors">
+            <Bell size={20} />
+            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-state-danger rounded-full border border-white"></span>
+          </button>
+
+          <div className="h-8 w-px bg-brand-200 hidden sm:block"></div>
+
+          <div className="flex items-center gap-3">
+            <img src="https://i.pravatar.cc/150?u=a042581f4e29026704d" alt="Profile" className="w-8 h-8 rounded-full border border-brand-200" />
+            <div className="hidden sm:block text-sm">
+              <p className="font-semibold text-brand-900 leading-none mb-1">
+                {user?.name || 'Loading...'}
+              </p>
+              <p className="text-brand-500 text-xs leading-none capitalize">{role}</p>
+            </div>
+          </div>
+
+          <button 
+            onClick={() => { setRole(null); setUser(null); }} 
+            className="p-2 text-brand-400 hover:text-state-danger hover:bg-state-dangerLight rounded-lg transition-colors ml-2"
+            title="Logout"
+          >
+            <LogOut size={20} />
           </button>
         </div>
       </nav>
 
       <main className="flex-1 relative overflow-hidden">
-        {role === 'patient' && <PatientView />}
+        {role === 'patient' && <PatientView user={user} />}
         {role === 'doctor' && <Dashboard />}
         {role === 'admin' && <DJConsole />}
       </main>
@@ -70,19 +82,6 @@ function App() {
   );
 }
 
-function RoleCard({ icon, title, desc, onClick }) {
-  return (
-    <div 
-      onClick={onClick}
-      className="bg-white border border-brand-200 p-8 rounded-2xl cursor-pointer hover:border-brand-primary hover:shadow-lg transition-all duration-300 text-center flex flex-col items-center group"
-    >
-      <div className="p-5 bg-brand-50 rounded-full text-brand-primary group-hover:bg-brand-primary group-hover:text-white transition-all duration-300 mb-5">
-        {icon}
-      </div>
-      <h3 className="text-xl font-semibold text-brand-900 mb-2">{title}</h3>
-      <p className="text-sm text-brand-500 leading-relaxed">{desc}</p>
-    </div>
-  );
-}
+
 
 export default App;

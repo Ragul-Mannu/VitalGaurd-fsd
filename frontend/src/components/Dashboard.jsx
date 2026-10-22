@@ -1,46 +1,112 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Activity, Heart, Thermometer, Droplets, User, Bell, CheckCircle2, AlertTriangle, XOctagon, Check } from 'lucide-react';
+import { Activity, Heart, Thermometer, Droplets, User, Bell, CheckCircle2, AlertTriangle, XOctagon, Check, Plus, Cpu, Trash2, ShieldAlert } from 'lucide-react';
+import AddPatientModal from './AddPatientModal';
 
 export default function Dashboard() {
   const [dataPoints, setDataPoints] = useState([]);
   const [currentVitals, setCurrentVitals] = useState({ heartRate: '--', spO2: '--', systolicBP: '--', temperature: '--' });
   const [alerts, setAlerts] = useState([]);
+  const [patients, setPatients] = useState([]);
   const [patient, setPatient] = useState(null);
   const [riskTier, setRiskTier] = useState('NORMAL');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [availability, setAvailability] = useState(null);
   const socketRef = useRef(null);
+  const activePatientIdRef = useRef(null);
+
+  const fetchAvailability = () => {
+    fetch('http://localhost:5000/api/systems/availability')
+      .then(res => res.json())
+      .then(data => setAvailability(data))
+      .catch(err => console.error('Error fetching system availability:', err));
+  };
+
+  const loadPatientState = (p) => {
+    setPatient(p);
+    activePatientIdRef.current = p._id;
+    
+    // Reset view
+    setCurrentVitals({ heartRate: '--', spO2: '--', systolicBP: '--', temperature: '--' });
+    setAlerts([]);
+    setDataPoints([]);
+    setRiskTier('NORMAL');
+
+    fetch(`http://localhost:5000/api/patient/${p._id}/state`)
+      .then(res => res.json())
+      .then(stateData => {
+        if (stateData.latestVitals) setCurrentVitals(stateData.latestVitals);
+        if (stateData.activeAlerts.length > 0) {
+          setAlerts(stateData.activeAlerts);
+          if (stateData.activeAlerts.some(a => a.riskTier === 'CRITICAL')) setRiskTier('CRITICAL');
+          else setRiskTier('WARNING');
+        }
+        if (stateData.vitalsHistory) {
+          const formatted = stateData.vitalsHistory.reverse().map(v => ({
+            time: new Date(v.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second:'2-digit' }),
+            ...v
+          }));
+          setDataPoints(formatted);
+        }
+      });
+  };
+
+  const dischargePatient = async (patientId, e) => {
+    if (e) e.stopPropagation();
+    const pObj = patients.find(p => p._id === patientId);
+    const confirmName = pObj ? pObj.name : 'this patient';
+    if (!window.confirm(`Discharge ${confirmName} and free up monitoring system (${pObj?.deviceId})?`)) return;
+
+    try {
+      const res = await fetch(`http://localhost:5000/api/patients/${patientId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to discharge patient');
+      
+      setPatients(prev => {
+        const next = prev.filter(p => p._id !== patientId);
+        if (activePatientIdRef.current === patientId) {
+          if (next.length > 0) loadPatientState(next[0]);
+          else {
+            setPatient(null);
+            activePatientIdRef.current = null;
+            setCurrentVitals({ heartRate: '--', spO2: '--', systolicBP: '--', temperature: '--' });
+            setAlerts([]);
+            setDataPoints([]);
+          }
+        }
+        return next;
+      });
+      fetchAvailability();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   useEffect(() => {
     socketRef.current = io('http://localhost:5000');
     
+    fetchAvailability();
+
     fetch('http://localhost:5000/api/init')
       .then(res => res.json())
       .then(data => {
         socketRef.current.emit('register_doctor', { doctorId: data.doctorId });
-        setPatient(data.patient);
         
-        fetch(`http://localhost:5000/api/patient/${data.patientId}/state`)
+        fetch('http://localhost:5000/api/patients')
           .then(res => res.json())
-          .then(stateData => {
-            if (stateData.latestVitals) setCurrentVitals(stateData.latestVitals);
-            if (stateData.activeAlerts.length > 0) {
-              setAlerts(stateData.activeAlerts);
-              if (stateData.activeAlerts.some(a => a.riskTier === 'CRITICAL')) setRiskTier('CRITICAL');
-              else setRiskTier('WARNING');
-            }
-            if (stateData.vitalsHistory) {
-              const formatted = stateData.vitalsHistory.reverse().map(v => ({
-                time: new Date(v.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second:'2-digit' }),
-                ...v
-              }));
-              setDataPoints(formatted);
+          .then(pts => {
+            setPatients(pts);
+            if (pts.length > 0) {
+              loadPatientState(pts[0]);
             }
           });
       });
 
     socketRef.current.on('vitals_update_all', (data) => {
-      const { vitals, risk, timestamp } = data;
+      const { vitals, risk, timestamp, patientId } = data;
+      if (patientId !== activePatientIdRef.current) return;
+
       setCurrentVitals(vitals);
       
       setRiskTier(prev => {
@@ -58,6 +124,7 @@ export default function Dashboard() {
     });
 
     socketRef.current.on('critical_alert_all', (data) => {
+      if (data.patient._id !== activePatientIdRef.current) return;
       setAlerts(prev => [data.alert, ...prev]); 
       setRiskTier(data.alert.riskTier);
     });
@@ -69,6 +136,10 @@ export default function Dashboard() {
         else if (!remaining.some(a => a.riskTier === 'CRITICAL')) setRiskTier('WARNING');
         return remaining;
       });
+    });
+
+    socketRef.current.on('system_availability_updated', (newAvailability) => {
+      setAvailability(newAvailability);
     });
 
     return () => {
@@ -93,9 +164,92 @@ export default function Dashboard() {
   const status = getStatusConfig(riskTier);
 
   return (
-    <div className="h-full w-full flex flex-col lg:flex-row p-6 lg:p-8 gap-8 bg-brand-50 overflow-y-auto">
+    <div className="h-full w-full flex bg-brand-50 overflow-hidden">
       
-      <div className="flex-1 flex flex-col gap-8">
+      {/* Sidebar - System Availability & Patient List */}
+      <div className="hidden md:flex w-72 flex-col bg-white border-r border-brand-200 shrink-0 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] z-10">
+        
+        {/* System Monitoring Availability Widget */}
+        <div className="p-3.5 mx-3 mt-3 mb-1 rounded-xl border bg-slate-50 border-slate-200/80">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <Cpu size={14} className="text-brand-primary" /> Monitoring Systems
+            </span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${availability?.isAvailable ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'}`}>
+              {availability?.isAvailable ? `${availability?.availableCount} Available` : '0 Available (Full)'}
+            </span>
+          </div>
+
+          <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden mb-2">
+            <div 
+              className={`h-full transition-all duration-500 ${availability?.isAvailable ? 'bg-brand-primary' : 'bg-rose-500'}`}
+              style={{ width: `${availability ? (availability.occupiedCount / availability.total) * 100 : 0}%` }}
+            />
+          </div>
+
+          <div className="flex justify-between items-center text-[10px] text-slate-500 font-medium">
+            <span>{availability?.occupiedCount || 0} Units In Use</span>
+            <span>Total: {availability?.total || 5} Units</span>
+          </div>
+        </div>
+
+        <div className="p-4 border-b border-brand-100 flex items-center justify-between bg-brand-50/50">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-brand-900">My Patients</h3>
+            <span className="bg-brand-200 text-brand-700 text-xs py-0.5 px-2 rounded-full font-bold">{patients.length}</span>
+          </div>
+          <button 
+            onClick={() => setShowAddModal(true)} 
+            title={availability?.isAvailable ? 'Add Patient' : 'Monitoring system unavailable (0 units free)'}
+            className={`p-1.5 rounded-md transition-colors flex items-center gap-1 text-xs font-semibold ${
+              availability?.isAvailable 
+                ? 'bg-brand-primary text-white hover:bg-brand-primaryDark' 
+                : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+            }`}
+          >
+            <Plus size={15} />
+            <span className="hidden lg:inline text-[11px]">{availability?.isAvailable ? 'Add' : 'Full'}</span>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {patients.map((p) => {
+            const isActive = patient?._id === p._id;
+            return (
+              <div 
+                key={p._id} 
+                onClick={() => loadPatientState(p)}
+                className={`group p-3 rounded-xl cursor-pointer flex items-center justify-between transition-colors border 
+                  ${isActive ? 'bg-brand-50 border-brand-200 shadow-sm' : 'border-transparent hover:border-brand-100 hover:bg-brand-50/50'}
+                `}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="relative shrink-0">
+                    <img src={`https://i.pravatar.cc/150?u=${p._id}`} className="w-9 h-9 rounded-full border border-brand-200" alt="patient"/>
+                    <div className={`absolute -bottom-1 -right-1 w-3 h-3 border-2 border-white rounded-full ${isActive && riskTier === 'CRITICAL' ? 'bg-state-danger' : isActive && riskTier === 'WARNING' ? 'bg-state-warning' : 'bg-state-success'}`}></div>
+                  </div>
+                  <div className="min-w-0 truncate">
+                    <div className="font-semibold text-brand-900 text-sm truncate">{p.name}</div>
+                    <div className="text-[11px] text-brand-500 font-mono">Unit: {p.deviceId}</div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={(e) => dischargePatient(p._id, e)}
+                  title={`Discharge ${p.name} & free up ${p.deviceId}`}
+                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all shrink-0 ml-1"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col lg:flex-row p-6 lg:p-8 gap-8 overflow-y-auto">
+        
+        <div className="flex-1 flex flex-col gap-8 min-w-0">
         
         {/* Patient Status Header */}
         <div className={`glass-panel p-6 flex justify-between items-center border-l-4 ${status.border} ${riskTier !== 'NORMAL' ? status.bg : ''} transition-all duration-300`}>
@@ -104,8 +258,28 @@ export default function Dashboard() {
               <User className="text-brand-500 w-8 h-8" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-brand-900">{patient?.name || 'Loading Patient...'}</h2>
-              <p className="text-brand-500 text-sm mt-1 font-medium">Patient ID: {patient?._id || '--'} &nbsp;|&nbsp; Monitor: {patient?.deviceId || '--'}</p>
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-bold text-brand-900">{patient?.name || 'Loading Patient...'}</h2>
+                {patient && (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                    <Cpu size={12} /> System: {patient.deviceId}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-4 mt-1">
+                <p className="text-brand-500 text-sm font-medium">
+                  Patient ID: {patient?._id || '--'} &nbsp;|&nbsp; Unit: <span className="font-mono font-bold text-brand-700">{patient?.deviceId || '--'}</span>
+                </p>
+                {patient && (
+                  <button 
+                    onClick={() => dischargePatient(patient._id)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors"
+                    title="Discharge this patient and free up the monitoring unit"
+                  >
+                    <Trash2 size={13} /> Discharge & Free Unit
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-4 text-right">
@@ -181,7 +355,7 @@ export default function Dashboard() {
       </div>
 
       {/* Clinical Alerts Sidebar */}
-      <div className="w-full lg:w-[400px] glass-panel p-0 flex flex-col h-[500px] lg:h-auto overflow-hidden">
+      <div className="w-full lg:w-[350px] shrink-0 glass-panel p-0 flex flex-col h-[500px] lg:h-[calc(100vh-8rem)] sticky top-0 overflow-hidden">
         <div className="p-6 border-b border-brand-100 bg-brand-50/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bell className="text-brand-500 w-5 h-5" />
@@ -217,6 +391,17 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+      </div>
+      
+      {showAddModal && (
+        <AddPatientModal 
+          onClose={() => setShowAddModal(false)}
+          onAdd={(newPatient) => {
+            setPatients([...patients, newPatient]);
+            setShowAddModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -12,16 +12,22 @@ export default function DJConsole() {
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [riskTier, setRiskTier] = useState('NORMAL');
-  const [patientId, setPatientId] = useState(null);
+  const [patients, setPatients] = useState([]);
+  const [patientId, setPatientId] = useState('');
   const socketRef = useRef(null);
   const intervalRef = useRef(null);
 
   useEffect(() => {
     socketRef.current = io('http://localhost:5000');
     
-    fetch('http://localhost:5000/api/init')
+    fetch('http://localhost:5000/api/patients')
       .then(res => res.json())
-      .then(data => setPatientId(data.patientId));
+      .then(pts => {
+        setPatients(pts);
+        if (pts.length > 0) {
+          setPatientId(pts[0]._id);
+        }
+      });
 
     socketRef.current.on('vitals_update_all', (data) => {
       setRiskTier(data.risk.tier);
@@ -108,7 +114,20 @@ export default function DJConsole() {
               <Activity className="text-brand-primary" size={28} />
               Vitals Simulation Panel
             </h2>
-            <p className="text-sm font-medium text-brand-500 mt-2">Adjust clinical parameters to test AI risk engine and real-time alerts.</p>
+            <div className="mt-3 flex items-center gap-3">
+              <span className="text-sm font-semibold text-brand-500">Target Patient:</span>
+              <select 
+                value={patientId} 
+                onChange={(e) => setPatientId(e.target.value)}
+                disabled={isStreaming}
+                className="bg-white border border-brand-200 text-brand-900 text-sm rounded-lg focus:ring-brand-primary focus:border-brand-primary block p-2 font-medium"
+              >
+                {patients.map(p => (
+                  <option key={p._id} value={p._id}>{p.name} ({p.deviceId})</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs font-medium text-brand-400 mt-2">Select a patient to simulate data for. Cannot change while streaming.</p>
           </div>
           
           <div className="flex items-center gap-5 bg-brand-50 p-3 rounded-xl border border-brand-200 shadow-sm">

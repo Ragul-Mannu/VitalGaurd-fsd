@@ -2,18 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { User, Activity, CheckCircle2 } from 'lucide-react';
 
-export default function PatientView() {
-  const [patient, setPatient] = useState(null);
+export default function PatientView({ user }) {
+  const [patient, setPatient] = useState(user);
   const [history, setHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/init')
-      .then(res => res.json())
-      .then(data => {
-        setPatient(data.patient);
-        return fetch(`http://localhost:5000/api/patient/${data.patientId}/state`);
-      })
+    if (!user?._id) return;
+    
+    fetch(`http://localhost:5000/api/patient/${user._id}/state`)
       .then(res => res.json())
       .then(stateData => {
         if (stateData.vitalsHistory) {

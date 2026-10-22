@@ -4,6 +4,8 @@ const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const Patient = require('./models/Patient');
@@ -46,18 +48,43 @@ app.get('/api/init', async (req, res) => {
       await RiskAlert.deleteMany();
       await VitalsLog.deleteMany();
 
+      const hashedPw = await bcrypt.hash('password123', 10);
+      
       doctor = await Doctor.create({
         name: 'Dr. Sarah Connor',
-        email: 'sarah@example.com',
+        email: 'doctor@example.com',
+        password: hashedPw,
         phone: process.env.DOCTOR_PHONE || '+1234567890',
         specialty: 'Cardiology'
       });
-
+      
       patient = await Patient.create({
         name: 'John Doe',
+        email: 'john@example.com',
+        password: hashedPw,
         age: 45,
         gender: 'Male',
         deviceId: 'DEV-001',
+        assignedDoctorId: doctor._id
+      });
+      
+      await Patient.create({
+        name: 'Jane Smith',
+        email: 'jane@example.com',
+        password: hashedPw,
+        age: 62,
+        gender: 'Female',
+        deviceId: 'DEV-002',
+        assignedDoctorId: doctor._id
+      });
+      
+      await Patient.create({
+        name: 'Robert Johnson',
+        email: 'robert@example.com',
+        password: hashedPw,
+        age: 55,
+        gender: 'Male',
+        deviceId: 'DEV-003',
         assignedDoctorId: doctor._id
       });
     } else {
@@ -70,6 +97,157 @@ app.get('/api/init', async (req, res) => {
     }
 
     res.json({ message: 'Initialized successfully', doctorId: doctor._id, patientId: patient._id, patient, doctor });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Login Endpoint
+app.post('/api/login', async (req, res) => {
+  const { email, password, role } = req.body;
+  
+  try {
+    if (role === 'admin') {
+      // Admin is hardcoded to the user's email
+      if (email === 'ragul@gmail.com' && password === 'admin123') {
+        return res.json({ token: 'admin_token', role: 'admin', user: { name: 'Admin Ragul', email } });
+      }
+      return res.status(401).json({ error: 'Invalid admin credentials' });
+    }
+
+    let user;
+    if (role === 'doctor') user = await Doctor.findOne({ email });
+    if (role === 'patient') user = await Patient.findOne({ email });
+    
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ error: 'Invalid password' });
+    
+    const token = jwt.sign({ id: user._id, role }, 'secret_key_rpm', { expiresIn: '1d' });
+    res.json({ token, role, user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const MONITORING_SYSTEM_POOL = process.env.SYSTEM_POOL 
+  ? process.env.SYSTEM_POOL.split(',').map(s => s.trim()) 
+  : ['DEV-001', 'DEV-002', 'DEV-003', 'DEV-004', 'DEV-005'];
+
+async function getSystemAvailability() {
+  const patients = await Patient.find({}, 'deviceId name');
+  const occupiedMap = new Map();
+  patients.forEach(p => {
+    if (p.deviceId) occupiedMap.set(p.deviceId, p.name);
+  });
+
+  const occupiedDevices = MONITORING_SYSTEM_POOL
+    .filter(devId => occupiedMap.has(devId))
+    .map(devId => ({ deviceId: devId, patientName: occupiedMap.get(devId) }));
+
+  const availableDevices = MONITORING_SYSTEM_POOL.filter(devId => !occupiedMap.has(devId));
+
+  return {
+    total: MONITORING_SYSTEM_POOL.length,
+    occupiedCount: occupiedDevices.length,
+    availableCount: availableDevices.length,
+    isAvailable: availableDevices.length > 0,
+    availableDevices,
+    occupiedDevices
+  };
+}
+
+// System Availability Endpoint
+app.get('/api/systems/availability', async (req, res) => {
+  try {
+    const availability = await getSystemAvailability();
+    res.json(availability);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all patients
+app.get('/api/patients', async (req, res) => {
+  try {
+    const patients = await Patient.find();
+    res.json(patients);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create new patient (with system availability enforcement)
+app.post('/api/patients', async (req, res) => {
+  try {
+    const { name, email, password, age, gender, deviceId, assignedDoctorId } = req.body;
+
+    const availability = await getSystemAvailability();
+
+    // Enforce system availability: If no monitoring units are free, reject
+    if (!availability.isAvailable) {
+      return res.status(400).json({ 
+        error: 'No monitoring systems available. All monitoring devices are currently occupied. Please discharge a patient to free up a system.' 
+      });
+    }
+
+    const selectedDevice = deviceId || availability.availableDevices[0];
+
+    // Check if the chosen device is already assigned to someone else
+    const existingWithDevice = await Patient.findOne({ deviceId: selectedDevice });
+    if (existingWithDevice) {
+      return res.status(400).json({ 
+        error: `Monitoring system ${selectedDevice} is already allocated to patient ${existingWithDevice.name}.` 
+      });
+    }
+
+    let doctorIdToAssign = assignedDoctorId;
+    if (!doctorIdToAssign) {
+      const defaultDoc = await Doctor.findOne();
+      if (defaultDoc) doctorIdToAssign = defaultDoc._id;
+    }
+
+    const hashedPw = await bcrypt.hash(password || 'password123', 10);
+    const newPatient = await Patient.create({
+      name, 
+      email, 
+      password: hashedPw, 
+      age, 
+      gender, 
+      deviceId: selectedDevice, 
+      assignedDoctorId: doctorIdToAssign
+    });
+
+    // Broadcast updated system availability to all connected dashboards
+    const updatedAvailability = await getSystemAvailability();
+    io.emit('system_availability_updated', updatedAvailability);
+
+    res.json(newPatient);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Discharge patient and release monitoring system
+app.delete('/api/patients/:id', async (req, res) => {
+  try {
+    const patient = await Patient.findById(req.params.id);
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+
+    const freedDevice = patient.deviceId;
+    await Patient.findByIdAndDelete(req.params.id);
+    await VitalsLog.deleteMany({ patientId: req.params.id });
+    await RiskAlert.deleteMany({ patientId: req.params.id });
+
+    const updatedAvailability = await getSystemAvailability();
+    io.emit('system_availability_updated', updatedAvailability);
+    io.emit('patient_discharged', { patientId: req.params.id, freedDevice });
+
+    res.json({ 
+      message: `Patient ${patient.name} discharged successfully. Device ${freedDevice} is now available.`, 
+      freedDevice 
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
